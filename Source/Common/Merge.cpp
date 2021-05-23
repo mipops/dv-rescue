@@ -321,7 +321,7 @@ bool dv_merge_private::Init()
         if (Verbosity > 5)
             cout << "File " << &Inputs_FileName - &Merge_InputFileNames.front() << ": " << Inputs_FileName << '\n';
         auto& Input = Inputs[&Inputs_FileName - &Merge_InputFileNames.front()];
-        if (!Inputs_FileName.empty() && Inputs_FileName != "-")
+        if (!Inputs_FileName.empty() && Inputs_FileName != "-" && Inputs_FileName.find("device://") != 0)
             Input.F = fopen(Inputs_FileName.c_str(), "rb");
         Input.Segments.resize(1);
     }

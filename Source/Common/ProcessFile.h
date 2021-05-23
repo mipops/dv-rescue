@@ -18,10 +18,15 @@
     #define MediaInfoNameSpace MediaInfoLib
 #endif
 #include "Common/Merge.h"
+#include "TimeCode.h"
 #include "MediaInfo/MediaInfo_Events.h"
 #include <vector>
 using namespace MediaInfoNameSpace;
 using namespace std;
+
+#ifdef ENABLE_AVFCTL
+class AVFCtlWrapper;
+#endif
 //---------------------------------------------------------------------------
 
 //---------------------------------------------------------------------------
@@ -84,7 +89,12 @@ public:
     ~file();
 
     void Parse(const String& FileName);
+    void Parse_Buffer(const uint8_t* Buffer, size_t Buffer_Size);
 
+    #ifdef ENABLE_AVFCTL
+    bool TransportControlsSupported();
+    void RewindToTimeCode(TimeCode TC);
+    #endif
     void AddChange(const MediaInfo_Event_DvDif_Change_0* FrameData);
     void AddFrame(const MediaInfo_Event_DvDif_Analysis_Frame_1* FrameData);
     void AddFrame(const MediaInfo_Event_Global_Demux_4* FrameData);
@@ -95,4 +105,10 @@ public:
 private:
     size_t Merge_FilePos;
     dv_merge Merge;
+
+    #ifdef ENABLE_AVFCTL
+    AVFCtlWrapper* Controller;
+    bool RewindMode;
+    TimeCode RewindTo;
+    #endif
 };

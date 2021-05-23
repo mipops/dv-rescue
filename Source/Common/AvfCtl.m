@@ -4,60 +4,131 @@
  *  be found in the LICENSE.txt file in the root of the source tree.
  */
 
-#import "avfctl.h"
+#import "Common/AvfCtl.h"
+#import <AVFoundation/AVFoundation.h>
 
-@implementation AVFCtlReceiver
-
-- (id) initWithDevice:(AVCaptureDevice*) theDevice
-{
+@implementation AVFCtlFileReceiver
+- (id) initWithOutputFileName:(NSString *)theFileName {
     self = [super init];
     if (self) {
-        _device = theDevice;
-
+        if ([theFileName isEqualToString: @"-"]) {
+            _output_file = [NSFileHandle fileHandleWithStandardOutput];
+        } else {
+            [[NSFileManager defaultManager] createFileAtPath:theFileName contents:nil attributes:nil];
+            _output_file = [NSFileHandle fileHandleForWritingAtPath:theFileName];
+        }
+        _output_data = [NSMutableData dataWithLength:1000];
     }
     return self;
 }
 
-- (void)  captureOutput:(AVCaptureOutput *)captureOutput
-  didOutputSampleBuffer:(CMSampleBufferRef)videoFrame
+- (void) captureOutput:(AVCaptureOutput *)captureOutput
+  didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
          fromConnection:(AVCaptureConnection *)connection
 {
-    //NSLog(@"Frame received. Output File: %@", _output_file);
     if (_output_file != nil) {
-        CMBlockBufferRef block_buffer = CMSampleBufferGetDataBuffer(videoFrame); // raw, DV data only
+        CMBlockBufferRef block_buffer = CMSampleBufferGetDataBuffer(sampleBuffer); // raw, DV data only
         size_t bb_len = CMBlockBufferGetDataLength(block_buffer);
         if (_output_data.length != bb_len) {
-            //NSLog(@"Frame received. New length: %ld -> %ld", _output_data.length, bb_len);
             _output_data.length = bb_len;
         }
-        //NSLog(@"Frame received. Copy %ld -> %ld", bb_len, _output_data.length);
         CMBlockBufferCopyDataBytes(block_buffer, 0, _output_data.length, _output_data.mutableBytes);
         [_output_file writeData:_output_data];
     }
 }
 
-- (void)  captureOutput:(AVCaptureOutput *)captureOutput
-    didDropSampleBuffer:(CMSampleBufferRef)videoFrame
+- (void) captureOutput:(AVCaptureOutput *)captureOutput
+    didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
          fromConnection:(AVCaptureConnection *)connection
 {
     NSLog(@"Frame dropped.");
 }
-
 @end
 
-
 @implementation AVFCtl
++ (NSUInteger) getDeviceCount
+{
+    return [[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed] count];
+}
 
-- (id) initWithDevice:(AVCaptureDevice*) theDevice
++ (NSString*) getDeviceName:(NSUInteger) index
+{
+    if (index >= [[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed] count])
+        return @"";
+
+    AVCaptureDevice* device = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed] objectAtIndex:index];
+    NSMutableString* toReturn = [NSMutableString stringWithString:[device localizedName]];
+    NSString* vendor = @"";
+    NSString* model = @"";
+    CFMutableDictionaryRef properties = NULL;
+    io_iterator_t iterator;
+    io_object_t service;
+    io_name_t location;
+    kern_return_t result;
+
+    NSString* uniqueID = [device uniqueID];
+    if ([uniqueID length] > 2 && [uniqueID hasPrefix:@"0x"])
+        uniqueID = [uniqueID substringFromIndex:2];
+
+    result = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceNameMatching("IOFireWireDevice"), &iterator);
+    if (result == KERN_SUCCESS)
+    {
+        while ((service=IOIteratorNext(iterator)) != 0) {
+            result = IORegistryEntryGetLocationInPlane(service, kIOServicePlane, location);
+            if (result==KERN_SUCCESS && strcmp(location, [uniqueID UTF8String]) == 0) {
+                result = IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0);
+                if (result==KERN_SUCCESS && properties!=NULL) {
+                    NSDictionary* dictionary = (__bridge NSDictionary*)properties;
+
+                    id probedVendor = dictionary[@"FireWire Vendor Name"];
+                    if ([probedVendor isKindOfClass:[NSString class]] && [probedVendor length] > 0)
+                        vendor = probedVendor;
+
+                    id probedModel = dictionary[@"FireWire Product Name"];
+                    if ([probedModel isKindOfClass:[NSString class]] && [probedModel length] > 0)
+                        model = probedModel;
+                }
+
+                IOObjectRelease(service);
+                break;
+            }
+
+            IOObjectRelease(service);
+        }
+
+        IOObjectRelease(iterator);
+    }
+
+    if ([model length] > 0)
+    {
+        if ([vendor length] > 0)
+            [toReturn appendFormat:@" (%@ %@)", vendor, model];
+        else
+            [toReturn appendFormat:@" (%@)", model];
+    }
+
+    if (properties != NULL)
+        CFRelease(properties);
+
+    return toReturn;
+}
+
++ (BOOL) isTransportControlsSupported:(NSUInteger) index
+{
+    if (index >= [[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed] count])
+        return NO;
+
+    return [[[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed] objectAtIndex:index] transportControlsSupported];
+}
+
+- (id) initWithDeviceIndex:(NSUInteger) index
 {
     self = [super init];
     if (self) {
-        _device = theDevice;
-
+        _device = [[AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed] objectAtIndex:index];
         _old_mode  = [_device transportControlsPlaybackMode];
         _old_speed = [_device transportControlsSpeed];
-
-        _status_mode = NO;
+        _log_changes = NO;
 
         NSKeyValueObservingOptions options = NSKeyValueObservingOptionNew;
         NSString *keyPath = nil;
@@ -92,11 +163,13 @@
             AVCaptureDeviceTransportControlsPlaybackMode mode =
                 [change[NSKeyValueChangeNewKey] integerValue];
 
-            if (_old_mode != mode && !_status_mode) {
-                NSLog(@"Mode changed: %ld -> %ld", _old_mode, mode);
+            if (_old_mode != mode) {
+                if (_log_changes)
+                    NSLog(@"Mode changed: %ld -> %ld", _old_mode, mode);
                 if (mode == AVCaptureDeviceTransportControlsNotPlayingMode &&
                     [_session isRunning]) {
-                    NSLog(@"Stopping capturing.");
+                    if (_log_changes)
+                        NSLog(@"Stopping capturing.");
                     [self stopCaptureSession];
                 }
                 _old_mode = mode;
@@ -105,8 +178,9 @@
             AVCaptureDeviceTransportControlsSpeed speed =
                 [change[NSKeyValueChangeNewKey] floatValue];
 
-            if (_old_speed != speed && !_status_mode) {
-                NSLog(@"Speed changed: %f -> %f", _old_speed, speed);
+            if (_old_speed != speed) {
+                if (_log_changes)
+                    NSLog(@"Speed changed: %f -> %f", _old_speed, speed);
                 _old_speed = speed;
             }
         }
@@ -116,11 +190,6 @@
                                change:change
                               context:context];
     }
-}
-
-- (NSString*) getDeviceName
-{
-    return [_device localizedName];
 }
 
 - (NSString*) getStatus
@@ -143,23 +212,7 @@
     return status;
 }
 
-- (void) setPlaybackMode:(AVCaptureDeviceTransportControlsPlaybackMode)theMode speed:(AVCaptureDeviceTransportControlsSpeed) theSpeed;
-{
-    @try {
-        NSError *error = nil;
-        if ([_device lockForConfiguration:&error] == YES) {
-            [_device setTransportControlsPlaybackMode:theMode speed:theSpeed];
-            [_device unlockForConfiguration];
-        } else {
-            NSLog(@"Error: %@", error);
-        }
-    }
-    @catch (NSException *e) {
-        NSLog(@"Exception: %@", e);
-    }
-}
-
-- (void) createCaptureSessionWithOutputFileName:(NSString*) theFileName;
+- (void) createCaptureSession:(id) receiver
 {
     NSError *error = nil;
 
@@ -185,24 +238,9 @@
         _output.videoSettings = @{ }; // set empty dict to receive raw data
         [_output setAlwaysDiscardsLateVideoFrames:NO];
 
-        // create receiver delegate
-        NSUInteger datalen = 1000; // some dummy value, subject to realloc during first frame
-
-        _receiver = [[AVFCtlReceiver alloc] initWithDevice:_device];
-         if ([theFileName isEqualToString: @"-"]) {
-            _receiver.output_file = [NSFileHandle fileHandleWithStandardOutput];
-        } else {
-            [[NSFileManager defaultManager] createFileAtPath:theFileName contents:nil attributes:nil];
-            _receiver.output_file = [NSFileHandle fileHandleForWritingAtPath:theFileName];
-        }
-        _receiver.output_data = [NSMutableData dataWithLength:datalen];
-
-        //NSLog(@"Output file: %@", _receiver.output_file);
-        //NSLog(@"Output data: %ld", _receiver.output_data.length);
-
         // add receiver delegate to output
         dispatch_queue_t queue = dispatch_queue_create("avfctl_queue", NULL);
-        [_output setSampleBufferDelegate:(id)_receiver queue:queue];
+        [_output setSampleBufferDelegate:(id)receiver queue:queue];
         // not in arc: dispatch_release(queue);
 
         // add output to session
@@ -210,14 +248,12 @@
             NSLog(@"Error adding output to session");
             return;
         }
-
         [_session addOutput:_output];
     }
     @catch (NSException *e) {
         NSLog(@"Error creating capture session: %@", e);
         return;
     }
-
 }
 
 - (void) startCaptureSession
@@ -229,6 +265,22 @@
 - (void) stopCaptureSession
 {
     [_session stopRunning];
+}
+
+- (void) setPlaybackMode:(AVCaptureDeviceTransportControlsPlaybackMode)theMode speed:(AVCaptureDeviceTransportControlsSpeed) theSpeed;
+{
+    @try {
+        NSError *error = nil;
+        if ([_device lockForConfiguration:&error] == YES) {
+            [_device setTransportControlsPlaybackMode:theMode speed:theSpeed];
+            [_device unlockForConfiguration];
+        } else {
+            NSLog(@"Error: %@", error);
+        }
+    }
+    @catch (NSException *e) {
+        NSLog(@"Exception: %@", e);
+    }
 }
 
 - (void) waitForSessionEnd

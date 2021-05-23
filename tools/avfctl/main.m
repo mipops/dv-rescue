@@ -54,71 +54,11 @@ int get_device_idx(NSString *str)
            return -1;
 }
 
-NSString *get_device_name(AVCaptureDevice *device)
-{
-    NSMutableString *toReturn = [NSMutableString stringWithString:[device localizedName]];
-    NSString *vendor = @"";
-    NSString *model = @"";
-    CFMutableDictionaryRef properties = NULL;
-    io_iterator_t iterator;
-    io_object_t service;
-    io_name_t location;
-    kern_return_t result;
-
-    NSString *uniqueID = [device uniqueID];
-    if ([uniqueID length] > 2 && [uniqueID hasPrefix:@"0x"])
-        uniqueID = [uniqueID substringFromIndex:2];
-
-    result = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceNameMatching("IOFireWireDevice"), &iterator);
-    if (result==KERN_SUCCESS)
-    {
-        while ((service=IOIteratorNext(iterator))!=0) {
-            result = IORegistryEntryGetLocationInPlane(service, kIOServicePlane, location);
-            if (result==KERN_SUCCESS && strcmp(location, [uniqueID UTF8String])==0) {
-                result = IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0);
-                if (result==KERN_SUCCESS && properties!=NULL) {
-                    NSDictionary* dictionary = (__bridge NSDictionary*)properties;
-
-                    id probedVendor = dictionary[@"FireWire Vendor Name"];
-                    if ([probedVendor isKindOfClass:[NSString class]] && [probedVendor length] > 0)
-                        vendor = probedVendor;
-
-                    id probedModel = dictionary[@"FireWire Product Name"];
-                    if ([probedModel isKindOfClass:[NSString class]] && [probedModel length] > 0)
-                        model = probedModel;
-                }
-
-                IOObjectRelease(service);
-                break;
-            }
-
-            IOObjectRelease(service);
-        }
-
-        IOObjectRelease(iterator);
-    }
-
-    if ([model length] > 0)
-    {
-        if ([vendor length] > 0)
-            [toReturn appendFormat:@" (%@ %@)", vendor, model];
-        else
-            [toReturn appendFormat:@" (%@)", model];
-    }
-
-    if (properties!=NULL)
-        CFRelease(properties);
-
-    return toReturn;
-}
-
 int main(int argc, char *argv[])
 {
     int device_idx = 0;
     bool foreground = false;
     NSString *output_filename = @"out.dv";
-
-    AVCaptureDevice *device = nil;
 
     NSMutableDictionary *args = [[NSMutableDictionary alloc] init];
 
@@ -157,10 +97,8 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed];
-
     // bail out if no devices are found
-    if ([devices count] == 0) {
+    if ([AVFCtl getDeviceCount] == 0) {
         NSLog(@"No devices found.");
         return 1;
     }
@@ -168,46 +106,46 @@ int main(int argc, char *argv[])
     // list devices upfront if requested
     if ([[args objectForKey:@"list_devices"] isEqualTo: @YES]) {
         NSLog(@"Devices:");
-        for (AVCaptureDevice *device in devices) {
-            NSLog(@"[%ld] %@", [devices indexOfObject:device], get_device_name(device));
+        for (NSUInteger idx = 0; idx < [AVFCtl getDeviceCount]; idx++) {
+            NSLog(@"[%ld] %@", idx, [AVFCtl getDeviceName:idx]);
         }
     }
 
     // check device index
-    if (device_idx < 0 || device_idx >= [devices count]) {
+    if (device_idx < 0 || device_idx >= [AVFCtl getDeviceCount]) {
         // error out if no valid device number could be identified from cmd line
         NSLog(@"Invalid device index given.");
         return 1;
     }
 
+    NSString *deviceName = [AVFCtl getDeviceName:device_idx];
+
+    // check if device supports transport control
+    if (![AVFCtl isTransportControlsSupported:device_idx]) {
+        NSLog(@"Transport Controls not supported for device [%d] %@.", device_idx, deviceName);
+        return 1;
+    }
+
+    AVFCtl *avfctl = nil;
     @try {
-        device = devices[device_idx];
+        // create AVFCTL with device
+        avfctl = [[AVFCtl alloc] initWithDeviceIndex:device_idx];
     }
     @catch (NSException *e) {
         NSLog(@"Error: %@", e);
         return 1;
     }
 
-    NSString *deviceName = get_device_name(device);
-
-    // check if device supports transport control
-    if (![device transportControlsSupported]) {
-        NSLog(@"Transport Controls not supported for device [%d] %@.", device_idx, deviceName);
-        return 1;
-    }
-
-    // create AVFCTL with device
-    AVFCtl *avfctl = [[AVFCtl alloc] initWithDevice: device];
-
     // Print status if requested
     if ([[args objectForKey:@"print_status"] isEqualTo: @YES]) {
-        avfctl.status_mode = YES;
-
-        [avfctl createCaptureSessionWithOutputFileName:@"/dev/null"];
+        [avfctl createCaptureSession:[[AVFCtlFileReceiver alloc] initWithOutputFileName:@"/dev/null"]];
         // give time for the driver to retrieves status from the device
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
         NSLog(@"Device [%d] %@ status: %@", device_idx, deviceName, [avfctl getStatus]);
     }
+
+    // Show device status changes
+    avfctl.log_changes = YES;
 
     // execute command
     if ([args objectForKey:@"cmd"]) {
@@ -217,7 +155,7 @@ int main(int argc, char *argv[])
             [cmd isEqualToString:@"play"]) {
             // do PLAY
             if (foreground) {
-                [avfctl createCaptureSessionWithOutputFileName:@"/dev/null"];
+                [avfctl createCaptureSession:[[AVFCtlFileReceiver alloc] initWithOutputFileName:@"/dev/null"]];
                 [avfctl startCaptureSession];
             }
             [avfctl setPlaybackMode:AVCaptureDeviceTransportControlsPlayingMode speed:1.0f];
@@ -233,7 +171,7 @@ int main(int argc, char *argv[])
                    [cmd isEqualToString:@"rew"]) {
             // do REW
             if (foreground) {
-                [avfctl createCaptureSessionWithOutputFileName:@"/dev/null"];
+                [avfctl createCaptureSession:[[AVFCtlFileReceiver alloc] initWithOutputFileName:@"/dev/null"]];
                 [avfctl startCaptureSession];
             }
             [avfctl setPlaybackMode:AVCaptureDeviceTransportControlsNotPlayingMode speed:-2.0f];
@@ -245,7 +183,7 @@ int main(int argc, char *argv[])
                    [cmd isEqualToString:@"ff"]) {
             // do FF
             if (foreground) {
-                [avfctl createCaptureSessionWithOutputFileName:@"/dev/null"];
+                [avfctl createCaptureSession:[[AVFCtlFileReceiver alloc] initWithOutputFileName:@"/dev/null"]];
                 [avfctl startCaptureSession];
             }
             [avfctl setPlaybackMode:AVCaptureDeviceTransportControlsNotPlayingMode speed:2.0f];
@@ -256,12 +194,11 @@ int main(int argc, char *argv[])
         } else if ([cmd isEqualToString:@"CAPTURE"] ||
                    [cmd isEqualToString:@"capture"]) {
             // do CAPTURE
-            [avfctl createCaptureSessionWithOutputFileName:output_filename];
+            AVFCtlFileReceiver *receiver = [[AVFCtlFileReceiver alloc] initWithOutputFileName:output_filename];
+            [avfctl createCaptureSession:receiver];
             [avfctl startCaptureSession];
             [avfctl setPlaybackMode:AVCaptureDeviceTransportControlsPlayingMode speed:1.0f];
-
             [avfctl waitForSessionEnd];
-
             [avfctl stopCaptureSession]; // redundant for internal errors in the session
         } else {
             NSLog(@"Invalid command given.");

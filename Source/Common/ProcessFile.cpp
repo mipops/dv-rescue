@@ -8,9 +8,11 @@
 #include <iomanip>
 #include <iostream>
 #include "Common/ProcessFile.h"
+#ifdef ENABLE_AVFCTL
+#include "Common/AvfCtlWrapper.h"
+#endif
 #include "ZenLib/Ztring.h"
 #include "Output.h"
-#include "TimeCode.h"
 using namespace ZenLib;
 using namespace std;
 //---------------------------------------------------------------------------
@@ -65,6 +67,9 @@ file::file()
 {
     Merge_FilePos = Merge_FilePos_Total++;
     FrameNumber = 0;
+    #ifdef ENABLE_AVFCTL
+    Controller=nullptr;
+    #endif
 }
 
 //---------------------------------------------------------------------------
@@ -72,9 +77,29 @@ void file::Parse(const String& FileName)
 {
     MI.Option(__T("File_Event_CallBackFunction"), __T("CallBack=memory://") + Ztring::ToZtring((size_t)&Event_CallBackFunction) + __T(";UserHandler=memory://") + Ztring::ToZtring((size_t)this));
     MI.Option(__T("File_DvDif_Analysis"), __T("1"));
-    if (Merge_InputFileNames.size() && Merge_InputFileNames.front() == "-") // Only if from stdin (not supported in other cases)
+    if (Merge_InputFileNames.size() && (Merge_InputFileNames.front() == "-" || Merge_InputFileNames.front().find("device://")==0)) // Only if from stdin (not supported in other cases)
         MI.Option(__T("File_Demux_Unpacketize"), __T("1"));
-    MI.Open(FileName);
+
+    #ifdef ENABLE_AVFCTL
+    Ztring ZFileName(FileName);
+    if (ZFileName.size()>9 && ZFileName.find(__T("device://"))==0)
+    {
+        size_t Device=(size_t)ZFileName.SubString(__T("device://"), __T("")).To_int64u();
+        Controller=new AVFCtlWrapper(Device);
+        FileWrapper Wrapper(this);
+        MI.Open_Buffer_Init();
+        Controller->CreateCaptureSession(&Wrapper);
+        Controller->StartCaptureSession();
+        Controller->SetPlaybackMode(Playback_Mode_Playing, 1.0);
+        Controller->WaitForSessionEnd();
+        Controller->StopCaptureSession();
+        MI.Open_Buffer_Finalize();
+    }
+    else
+    #endif
+    {
+        MI.Open(FileName);
+    }
 
     // Filing some info
     FrameRate = Ztring(MI.Get(Stream_Video, 0, __T("FrameRate_Original"))).To_float64();
@@ -85,8 +110,19 @@ void file::Parse(const String& FileName)
 }
 
 //---------------------------------------------------------------------------
+void file::Parse_Buffer(const uint8_t* Buffer, size_t Buffer_Size)
+{
+    MI.Open_Buffer_Continue(Buffer, Buffer_Size);
+}
+
+//---------------------------------------------------------------------------
 file::~file()
 {
+    #ifdef ENABLE_AVFCTL
+    if (Controller)
+        delete Controller;
+    #endif
+
     for (auto& Frame : PerFrame)
     {
         delete[] Frame->Errors;
@@ -105,8 +141,31 @@ file::~file()
 //***************************************************************************
 
 //---------------------------------------------------------------------------
+#ifdef ENABLE_AVFCTL
+bool file::TransportControlsSupported()
+{
+    return Merge_InputFileNames[0].find("device://") == 0;
+}
+#endif
+
+//---------------------------------------------------------------------------
+#ifdef ENABLE_AVFCTL
+void file::RewindToTimeCode(TimeCode TC)
+{
+    RewindMode=true;
+    RewindTo=TC;
+    Controller->SetPlaybackMode(Playback_Mode_Playing, -1.0);
+}
+#endif
+
+//---------------------------------------------------------------------------
 void file::AddChange(const MediaInfo_Event_DvDif_Change_0* FrameData)
 {
+    #ifdef ENABLE_AVFCTL
+    if (RewindMode)
+        return;
+    #endif
+
     FrameNumber++; // Event FrameCount is currently wrong
 
     // Check if there is a change we support
@@ -140,6 +199,24 @@ void file::AddChange(const MediaInfo_Event_DvDif_Change_0* FrameData)
 //---------------------------------------------------------------------------
 void file::AddFrame(const MediaInfo_Event_DvDif_Analysis_Frame_1* FrameData)
 {
+    #ifdef ENABLE_AVFCTL
+    if (RewindMode)
+    {
+        timecode TC_Temp(FrameData->TimeCode);
+        if (TC_Temp.HasValue())
+        {
+            TimeCode TC(TC_Temp.TimeInSeconds() / 3600, (TC_Temp.TimeInSeconds() / 60) % 60, TC_Temp.TimeInSeconds() % 60, TC_Temp.Frames(), 30 /*TEMP*/, TC_Temp.DropFrame());
+            if (TC.ToFrames()<=RewindTo.ToFrames())
+            {
+                RewindMode=false;
+                Controller->SetPlaybackMode(Playback_Mode_Playing, 1.0);
+                return;
+            }
+            else
+                return; //Continue in rewind mode
+        }
+    }
+    #endif
     MediaInfo_Event_DvDif_Analysis_Frame_1* ToPush = new MediaInfo_Event_DvDif_Analysis_Frame_1();
     std::memcpy(ToPush, FrameData, sizeof(MediaInfo_Event_DvDif_Analysis_Frame_1));
     if (FrameData->Errors)
@@ -202,10 +279,15 @@ void file::AddFrame(const MediaInfo_Event_DvDif_Analysis_Frame_1* FrameData)
 //---------------------------------------------------------------------------
 void file::AddFrame(const MediaInfo_Event_Global_Demux_4* FrameData)
 {
+    #ifdef ENABLE_AVFCTL
+    if (RewindMode)
+        return;
+    #endif
+
     // DV frame
     if (!FrameData->StreamIDs_Size || FrameData->StreamIDs[FrameData->StreamIDs_Size-1]==-1)
     {
-        if (!Merge_OutputFileName.empty() && (Merge_InputFileNames.empty() || Merge_InputFileNames[0] == "-")) // Only for stdin
+        if (!Merge_OutputFileName.empty() && (Merge_InputFileNames.empty() || Merge_InputFileNames[0] == "-" || Merge_InputFileNames[0].find("device://") == 0)) // Only for stdin
             Merge.AddFrame(Merge_FilePos, FrameData);
         return;
     }

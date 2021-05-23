@@ -35,6 +35,12 @@ bin_SCRIPTS = \
     ../../../tools/dvsampler
 
 if BUILD_AVFCTL
+    dvrescue_SOURCES += \
+        ../../../Source/Common/AvfCtl.m \
+        ../../../Source/Common/AvfCtlWrapper.mm \
+        ../../../Source/Common/ProcessFileWrapper.cpp
+    dvrescue_LDFLAGS = -framework IOKit -framework Foundation -framework AVFoundation -framework CoreMedia
+
     AVFCTL = ../../../tools/avfctl/avfctl
     $(AVFCTL):
 	$(MAKE) -C ../../../tools/avfctl

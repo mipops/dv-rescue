@@ -4,48 +4,49 @@
  *  be found in the LICENSE.txt file in the root of the source tree.
  */
 
+//---------------------------------------------------------------------------
+#pragma once
+
 #import <AVFoundation/AVFoundation.h>
 
-@interface AVFCtlReceiver : NSObject
+//***************************************************************************
+// Interface AVFCtlFileReceiver
+//***************************************************************************
 
-@property AVCaptureDevice *device;
-@property NSFileHandle *output_file;
-@property NSMutableData *output_data;
+@interface AVFCtlFileReceiver : NSObject
+@property (nonatomic, retain) NSMutableData *output_data;
+@property (nonatomic, retain) NSFileHandle *output_file;
 
-- (id) initWithDevice:(AVCaptureDevice*)theDevice;
-
-- (void)  captureOutput:(AVCaptureOutput *)captureOutput
-  didOutputSampleBuffer:(CMSampleBufferRef)videoFrame
-         fromConnection:(AVCaptureConnection *)connection;
-
-- (void)  captureOutput:(AVCaptureOutput *)captureOutput
-    didDropSampleBuffer:(CMSampleBufferRef)videoFrame
-         fromConnection:(AVCaptureConnection *)connection;
-
+- (id) initWithOutputFileName:(NSString*)theFileName;
+- (void) captureOutput:(AVCaptureOutput*)captureOutput
+  didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+         fromConnection:(AVCaptureConnection*)connection;
+- (void) captureOutput:(AVCaptureOutput*)captureOutput
+    didDropSampleBuffer:(CMSampleBufferRef)sampleBuffer
+         fromConnection:(AVCaptureConnection*)connection;
 @end
 
+//***************************************************************************
+// Interface AVFCtl
+//***************************************************************************
 
 @interface AVFCtl : NSObject
-
-@property AVCaptureDevice *device;
-@property AVCaptureSession *session;
-@property AVCaptureVideoDataOutput *output;
-@property AVFCtlReceiver *receiver;
-
+@property (nonatomic, retain) AVCaptureDevice *device;
+@property (nonatomic, retain) AVCaptureSession *session;
+@property (nonatomic, retain) AVCaptureVideoDataOutput *output;
 @property AVCaptureDeviceTransportControlsPlaybackMode old_mode;
 @property AVCaptureDeviceTransportControlsSpeed old_speed;
+@property BOOL log_changes;
 
-@property BOOL status_mode;
-
-- (id) initWithDevice:(AVCaptureDevice*) theDevice;
++ (NSUInteger) getDeviceCount;
++ (NSString*) getDeviceName:(NSUInteger) index;
++ (BOOL) isTransportControlsSupported:(NSUInteger) index;
+- (id) initWithDeviceIndex:(NSUInteger) index;
 - (void) dealloc;
-
-- (NSString*) getDeviceName;
 - (NSString*) getStatus;
-
-- (void) setPlaybackMode:(AVCaptureDeviceTransportControlsPlaybackMode)theMode speed:(AVCaptureDeviceTransportControlsSpeed) theSpeed;
-- (void) createCaptureSessionWithOutputFileName:(NSString*) theFileName;
+- (void) createCaptureSession:(id) receiver;
 - (void) startCaptureSession;
 - (void) stopCaptureSession;
+- (void) setPlaybackMode:(AVCaptureDeviceTransportControlsPlaybackMode)theMode speed:(AVCaptureDeviceTransportControlsSpeed) theSpeed;
 - (void) waitForSessionEnd;
 @end
