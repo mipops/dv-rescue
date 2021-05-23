@@ -4,7 +4,7 @@
  *  be found in the LICENSE.txt file in the root of the source tree.
  */
 
-#import <avfctl.h>
+#import "Common/AvfCtl.h"
 
 void help(BOOL full)
 {
