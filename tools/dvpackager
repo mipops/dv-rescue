@@ -317,26 +317,15 @@ _report(){
 }
 
 MATCH_FRAMES="d:frame[1]|"
-if [[ -d "/usr/local/opt/ffmpegdecklink" ]] ; then
-    BREW_PREFIX="/usr/local/opt/ffmpegdecklink"
-elif [[ -d "/home/linuxbrew/.linuxbrew/opt/ffmpegdecklink" ]] ; then
-    BREW_PREFIX="/home/linuxbrew/.linuxbrew/opt/ffmpegdecklink"
-else
-    BREW_PREFIX="$(brew --prefix ffmpegdecklink 2>/dev/null)"
-fi
-if [[ -n "${BREW_PREFIX}" && -d "${BREW_PREFIX}/bin" ]] ; then
-    FFMPEG_PATH="${BREW_PREFIX}/bin/ffmpeg-dl"
-else
-    FFMPEG_PATH="$(which ffmpeg)"
-    FFMPEG_DL="N"
-fi
+FFMPEG_PATH="$(which ffmpeg)"
+
 # verify that ffmpeg qualifies
 FFversion="$("${FFMPEG_PATH}" -version)"
 LAVFversion="$(echo "${FFversion}" | grep "libavformat" | head -n 1 | sed 's/[^0-9./]//g' | cut -d "/" -f 1)"
 LAVFversion_maj="$(echo "${LAVFversion}" | cut -d. -f1)"
 LAVFversion_min="$(echo "${LAVFversion}" | cut -d. -f2)"
 LAVFversion_mic="$(echo "${LAVFversion}" | cut -d. -f3)"
-if [[ "${FFMPEG_DL}" = "N" ]] && ! ( \
+if ! ( \
     [[ "${LAVFversion_maj}" -gt 58 ]] || \
     ( [[ "${LAVFversion_maj}" -eq 58 ]] && [[ "${LAVFversion_min}" -gt 65 ]] ) || \
     ( [[ "${LAVFversion_maj}" -eq 58 ]] && [[ "${LAVFversion_min}" -eq 65 ]] && [[ "${LAVFversion_min}" -ge 101 ]] ) \
