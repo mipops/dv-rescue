@@ -26,6 +26,7 @@ CXXFLAGS="$CXXFLAGS"
 AC_PROG_CC
 AC_PROG_CXX
 AC_PROG_OBJC
+AC_PROG_OBJCXX
 AC_PROG_LIBTOOL
 AC_PROG_INSTALL
 
@@ -84,6 +85,10 @@ case "${host_os}" in
 esac
 
 AM_CONDITIONAL([BUILD_AVFCTL], [test "$host_mac" = "yes" -a "$enable_avfctl" = "yes"])
+if test "$host_mac" = "yes" -a "$enable_avfctl" = "yes" ; then
+    AC_DEFINE(ENABLE_AVFCTL)
+
+fi
 
 dnl #########################################################################
 dnl ### MediaInfo flags
