@@ -69,6 +69,7 @@ file::file()
     FrameNumber = 0;
     #ifdef ENABLE_AVFCTL
     Controller=nullptr;
+    RewindMode=Rewind_Mode_None;
     #endif
 }
 
@@ -152,8 +153,18 @@ bool file::TransportControlsSupported()
 #ifdef ENABLE_AVFCTL
 void file::RewindToTimeCode(TimeCode TC)
 {
-    RewindMode=true;
-    RewindTo=TC;
+    RewindMode=Rewind_Mode_TimeCode;
+    RewindTo_TC=TC;
+    Controller->SetPlaybackMode(Playback_Mode_Playing, -1.0);
+}
+#endif
+
+//---------------------------------------------------------------------------
+#ifdef ENABLE_AVFCTL
+void file::RewindToAbst(int Abst)
+{
+    RewindMode=Rewind_Mode_Abst;
+    RewindTo_Abst=Abst;
     Controller->SetPlaybackMode(Playback_Mode_Playing, -1.0);
 }
 #endif
@@ -162,7 +173,7 @@ void file::RewindToTimeCode(TimeCode TC)
 void file::AddChange(const MediaInfo_Event_DvDif_Change_0* FrameData)
 {
     #ifdef ENABLE_AVFCTL
-    if (RewindMode)
+    if (RewindMode!=Rewind_Mode_None)
         return;
     #endif
 
@@ -200,21 +211,41 @@ void file::AddChange(const MediaInfo_Event_DvDif_Change_0* FrameData)
 void file::AddFrame(const MediaInfo_Event_DvDif_Analysis_Frame_1* FrameData)
 {
     #ifdef ENABLE_AVFCTL
-    if (RewindMode)
+    abst_bf AbstBf_Temp(FrameData->AbstBf);
+    if (RewindMode==Rewind_Mode_TimeCode)
     {
         timecode TC_Temp(FrameData->TimeCode);
         if (TC_Temp.HasValue())
         {
             TimeCode TC(TC_Temp.TimeInSeconds() / 3600, (TC_Temp.TimeInSeconds() / 60) % 60, TC_Temp.TimeInSeconds() % 60, TC_Temp.Frames(), 30 /*TEMP*/, TC_Temp.DropFrame());
-            if (TC.ToFrames()<=RewindTo.ToFrames())
+            if (TC.ToFrames()<=RewindTo_TC.ToFrames())
             {
-                RewindMode=false;
+                RewindMode=Rewind_Mode_None;
                 Controller->SetPlaybackMode(Playback_Mode_Playing, 1.0);
                 return;
             }
             else
                 return; //Continue in rewind mode
         }
+        else
+            return; //Continue in rewind mode
+    }
+    else if (RewindMode==Rewind_Mode_Abst)
+    {
+        abst_bf AbstBf_Temp(FrameData->AbstBf);
+        if (AbstBf_Temp.HasAbsoluteTrackNumberValue())
+        {
+            if (AbstBf_Temp.AbsoluteTrackNumber()<=RewindTo_Abst)
+            {
+                RewindMode=Rewind_Mode_None;
+                Controller->SetPlaybackMode(Playback_Mode_Playing, 1.0);
+                return;
+            }
+            else
+                return; //Continue in rewind mode
+        }
+        else
+            return; //Continue in rewind mode
     }
     #endif
     MediaInfo_Event_DvDif_Analysis_Frame_1* ToPush = new MediaInfo_Event_DvDif_Analysis_Frame_1();
@@ -280,7 +311,7 @@ void file::AddFrame(const MediaInfo_Event_DvDif_Analysis_Frame_1* FrameData)
 void file::AddFrame(const MediaInfo_Event_Global_Demux_4* FrameData)
 {
     #ifdef ENABLE_AVFCTL
-    if (RewindMode)
+    if (RewindMode!=Rewind_Mode_None)
         return;
     #endif
 

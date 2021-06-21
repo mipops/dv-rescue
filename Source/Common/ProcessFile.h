@@ -35,6 +35,18 @@ string MediaInfo_Version();
 //---------------------------------------------------------------------------
 
 //***************************************************************************
+// Enums
+//***************************************************************************
+
+#ifdef ENABLE_AVFCTL
+enum rewind_mode {
+    Rewind_Mode_None,
+    Rewind_Mode_TimeCode,
+    Rewind_Mode_Abst,
+};
+#endif
+
+//***************************************************************************
 // Class file
 //***************************************************************************
 
@@ -94,6 +106,7 @@ public:
     #ifdef ENABLE_AVFCTL
     bool TransportControlsSupported();
     void RewindToTimeCode(TimeCode TC);
+    void RewindToAbst(int Abst);
     #endif
     void AddChange(const MediaInfo_Event_DvDif_Change_0* FrameData);
     void AddFrame(const MediaInfo_Event_DvDif_Analysis_Frame_1* FrameData);
@@ -108,7 +121,8 @@ private:
 
     #ifdef ENABLE_AVFCTL
     AVFCtlWrapper* Controller;
-    bool RewindMode;
-    TimeCode RewindTo;
+    rewind_mode RewindMode;
+    TimeCode RewindTo_TC;
+    int RewindTo_Abst;
     #endif
 };
